@@ -1,0 +1,5129 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "RoutineHub API",
+    "version": "1.0.0",
+    "summary": "Official HTTP API for RoutineHub — shortcuts and the Claude registry (prompts, skills, plugins).",
+    "description": "The official RoutineHub v1 API.\n\n## Authentication\nMost endpoints are authenticated with an **API key carried as a path segment**, e.g. `GET /api/v1/<api_key>/shortcuts`. Generate or rotate your key on the RoutineHub **Settings → API** page; generating a new key invalidates the old one. Store the key on your own machine, never in a shared repo. A few endpoints are public (the latest-version lookup) or use a separate HubSign key (`/sign-shortcut`).\n\n## Response envelope\nEvery JSON response uses a `result` field: `{\"result\": \"success\", ...}` or `{\"result\": \"error\", \"message\": \"...\"}`. Form-validation errors also include an `errors` object keyed by field name.\n\n## Status codes\nThe newer **registry** endpoints (skills/prompts/plugins) use standard HTTP status codes: `201` created, `400` invalid, `401` bad key, `404` not found / not yours, `409` duplicate content, `429` rate-limited. The older **shortcut** endpoints are legacy: most of them return **HTTP 200 even on failure** — always check the `result` field rather than the status code for those.\n\n## Rate limits\nRegistry publishing is capped per day per account: skills 5, prompts 10, plugins 5, and 20 new versions/day. Exceeding a cap returns `429`.",
+    "contact": {
+      "name": "RoutineHub",
+      "url": "https://routinehub.co"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://routinehub.co/api/v1",
+      "description": "Production"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Shortcuts",
+      "description": "Publish and retrieve iOS Shortcuts."
+    },
+    {
+      "name": "Updater",
+      "description": "The free RoutineHub Updater: one call that tells a phone which of its shortcuts have a newer version on RoutineHub. Public, no key. The open version manifest it reads is documented at https://routinehub.co/docs/updater/."
+    },
+    {
+      "name": "Problem reports",
+      "description": "Private problem reports from a person to a listing's dev. A shortcut drops a draft; the person sends it from Safari, signed in."
+    },
+    {
+      "name": "AI",
+      "description": "Ask a model from inside a shortcut. Apple's \"Use Model\" action needs iOS 26 and an iPhone 15 Pro or newer, so a shortcut built on it does nothing on an older phone. This route answers from RoutineHub instead, over a plain Get Contents of URL — an action that has shipped since iOS 13.\n\nThe shortcut carries no model API key, because the key is ours. The person running it sends their own RoutineHub API key and must be an active member. Rolling out behind a switch: until it is on, this route answers 404."
+    },
+    {
+      "name": "Skills",
+      "description": "Publish Claude Skills to the registry."
+    },
+    {
+      "name": "Prompts",
+      "description": "Publish Claude Prompts (slash commands) to the registry."
+    },
+    {
+      "name": "Plugins",
+      "description": "Publish Claude Plugins (bundles of skills/prompts) to the registry."
+    },
+    {
+      "name": "Boxes",
+      "description": "Members only: your own Linux box on Google Cloud, created and destroyed over your API key (the same key as the registry API) or the MCP server. Rolling out behind a switch: until it is on, every Boxes route answers 404. Non-members get 403 \"Boxes are a member perk.\" A box carries your registered SSH keys under your RoutineHub username, lives at most 8 hours, and deletes itself at its deadline."
+    },
+    {
+      "name": "Key Vault",
+      "description": "Your API key never ships inside your shortcut. A member developer stores a third-party API key on RoutineHub, points a route at an allowlisted service, and their published shortcut asks us for the ANSWER instead of carrying the key — so the `.shortcut` file anyone can download has nothing worth stealing in it.\n\nThese two routes are what the PUBLISHED shortcut calls, and both are keyless: the caller is a stranger's phone, and the install token is the only credential it ever holds. Creating keys and routes happens in the browser at https://routinehub.co/vault/, on your normal login.\n\nOnly services on the published allowlist can be called, and only over https. Rolling out behind a switch: until it is on, every Key Vault route answers 404."
+    },
+    {
+      "name": "Apps",
+      "description": "Members only: live logic for a shortcut, so it never needs reinstalling. Point one of your shortcuts at your own https server (a Cloudflare Worker, Vercel, anything with a URL); RoutineHub gives it a front door at `https://<you>-<app>.apps.rhub.pro/` and a generated loader shortcut. The front door checks each phone's install token, rate-limits it, and forwards the call with signed `X-RH-*` headers (`X-RH-Shortcut`, `X-RH-Version`, `X-RH-Install`, `X-RH-Entitled`, `X-RH-Timestamp`, `X-RH-Signature` = hex HMAC-SHA256 with the app secret over `METHOD\\npath?query\\nX-RH-Timestamp\\nsha256(body)`). Three live apps per member. Rolling out behind a switch: until it is on, every Apps route answers 404. Non-members get 403 \"Live logic is a member perk.\""
+    },
+    {
+      "name": "Proof of purchase",
+      "description": "Gate a paid shortcut with the buyer's read-only Proof of Purchase key. https://routinehub.co/docs/proof-of-purchase/"
+    }
+  ],
+  "paths": {
+    "/{api_key}/shortcuts": {
+      "get": {
+        "tags": [
+          "Shortcuts"
+        ],
+        "summary": "List your shortcuts",
+        "description": "Returns every shortcut owned by the account that the API key belongs to, keyed by shortcut name.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Map of shortcut name to id + published flag. NOTE: a bad key also returns 200 with `result: error`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "shortcuts": {
+                      "type": "object",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer",
+                            "example": 7388
+                          },
+                          "published": {
+                            "type": "string",
+                            "enum": [
+                              "true",
+                              "false"
+                            ],
+                            "description": "String literal, not a boolean."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{api_key}/shortcuts/create": {
+      "post": {
+        "tags": [
+          "Shortcuts"
+        ],
+        "summary": "Create a shortcut (with its first version)",
+        "description": "Creates a new shortcut AND its first version in one call, from an iCloud share link you already have (Share > Copy iCloud Link in the Shortcuts app — minting the link needs a real Apple device). Draft by default; pass published=true to go live at once. Optional price_usd + payout put it on sale in the same call; a rejected price returns 400 and creates nothing. Submitted as form fields, not JSON.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "brief",
+                  "description",
+                  "categories",
+                  "link"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "description": "Shortcut title."
+                  },
+                  "brief": {
+                    "type": "string",
+                    "maxLength": 100,
+                    "description": "One-line summary."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Full listing text (Markdown)."
+                  },
+                  "categories": {
+                    "type": "array",
+                    "items": {
+                      "type": "integer"
+                    },
+                    "description": "1-2 category ids (repeat the field)."
+                  },
+                  "link": {
+                    "type": "string",
+                    "description": "iCloud share link for the first version.",
+                    "pattern": "^https://www\\.icloud\\.com/shortcuts/[a-z0-9]{32}$"
+                  },
+                  "version": {
+                    "type": "string",
+                    "maxLength": 25,
+                    "description": "First version label. Default \"1.0\"."
+                  },
+                  "changes": {
+                    "type": "string",
+                    "description": "Changelog text. Default \"Initial release.\"."
+                  },
+                  "published": {
+                    "type": "boolean",
+                    "description": "true to publish immediately. Default false (draft)."
+                  },
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Optional: sell it from day one, e.g. \"4.99\" (min $0.99, max $100000, 2 decimals)."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Payout rail when price_usd is set; required only when both rails are onboarded."
+                  },
+                  "payment_type": {
+                    "type": "string",
+                    "enum": [
+                      "one_time",
+                      "recurring"
+                    ],
+                    "description": "One-time purchase (default) or 30-day recurring subscription."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created. Returns the shortcut's id (use it for every other shortcut endpoint), url, latest_version, and the sale state.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "integer"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "published": {
+                      "type": "boolean"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "latest_version": {
+                      "type": "string"
+                    },
+                    "price_usd": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "payout": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid link (not iCloud / already in use), invalid metadata (an errors object per field), or a rejected price. Nothing is created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid API key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "The account is restricted from publishing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{api_key}/shortcuts/{id}/price": {
+      "post": {
+        "tags": [
+          "Shortcuts"
+        ],
+        "summary": "Set or clear a shortcut's price",
+        "description": "Change ONLY the price of a shortcut you own — both payout rails (card via Stripe, USDC on Base), one-time or recurring. The shortcut-side mirror of the registry price endpoint: touches pricing and nothing else, so it can never blank the listing. Send price_usd \"0\" to make it free again.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/ShortcutId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "price_usd"
+                ],
+                "properties": {
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Price as a plain 2-decimal string, e.g. \"1.99\" (minimum $0.99, maximum $100000). Amounts like \"1.999\" are rejected with 400. Send \"0\" to make the shortcut free again."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Required when price_usd > 0 and both payout rails are onboarded; otherwise the onboarded rail is used."
+                  },
+                  "payment_type": {
+                    "type": "string",
+                    "enum": [
+                      "one_time",
+                      "recurring"
+                    ],
+                    "description": "One-time purchase (default) or 30-day recurring subscription."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The updated sale state (price_usd and payout are null after clearing).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string"
+                    },
+                    "id": {
+                      "type": "integer"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "published": {
+                      "type": "boolean"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "latest_version": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "price_usd": {
+                      "type": "string",
+                      "nullable": true
+                    },
+                    "payout": {
+                      "type": "string",
+                      "nullable": true
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing/invalid price_usd, unknown payment_type, or the chosen payout rail is not onboarded (the message names the rail and where to set it up).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No shortcut with that ID under your account.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{api_key}/shortcuts/{id}/versions/create": {
+      "post": {
+        "tags": [
+          "Shortcuts"
+        ],
+        "summary": "Create a new shortcut version",
+        "description": "Adds a new version to a shortcut you own. Submitted as form fields, not JSON.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/ShortcutId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "link",
+                  "changes"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "maxLength": 10,
+                    "description": "Version label, e.g. 1.2. Must not duplicate a version already in review/approved."
+                  },
+                  "link": {
+                    "type": "string",
+                    "description": "iCloud share link.",
+                    "pattern": "^https://www\\.icloud\\.com/shortcuts/[a-z0-9]{32}$"
+                  },
+                  "changes": {
+                    "type": "string",
+                    "description": "Changelog text. Emojis are rejected."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "`result: success` with a message on success, or `result: error` with a reason (legacy: errors are also 200).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{api_key}/shortcuts/{id}/publish": {
+      "post": {
+        "tags": [
+          "Shortcuts"
+        ],
+        "summary": "Publish a shortcut",
+        "description": "Publishes a shortcut you own. It must already have at least one version.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/ShortcutId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`result: success` on success; `result: error` (still 200) if it has no version or is already published.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/{api_key}/shortcuts/{id}/unpublish": {
+      "post": {
+        "tags": [
+          "Shortcuts"
+        ],
+        "summary": "Unpublish a shortcut",
+        "description": "Unpublishes a shortcut you own.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/ShortcutId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "`result: success` on success; `result: error` (still 200) if it was already unpublished.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MessageEnvelope"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/shortcuts/{id}/versions/latest": {
+      "get": {
+        "tags": [
+          "Shortcuts"
+        ],
+        "summary": "Get the latest version of a published shortcut (public)",
+        "description": "Public — no API key required. Returns the latest version metadata of a published shortcut. Sends permissive CORS headers so it can be called from the browser. Updater apps: pass a valid API key (the `api_key` query parameter or `RoutineHub-Api-Key` header — generate one under Settings → API) and `URL` will be a short-lived signed download link that redirects straight to the shortcut file. Without a key, `URL` is the shortcut's RoutineHub page.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ShortcutId"
+          },
+          {
+            "name": "api_key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Optional. A valid RoutineHub API key (Settings → API). Authenticated callers get a working, short-lived signed download link in `URL` instead of the shortcut page. Fetch a fresh link per update check — links expire about an hour after minting."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Latest version metadata.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "id": {
+                      "type": "integer",
+                      "example": 7388
+                    },
+                    "Version": {
+                      "type": "string",
+                      "example": "1.2"
+                    },
+                    "URL": {
+                      "type": "string",
+                      "description": "Where to send the user. For API-key-authenticated callers and approved updater partners: a short-lived signed download link that redirects to the shortcut file. Otherwise: the shortcut's RoutineHub page URL. Paid shortcuts always return the page URL so the purchase flow runs."
+                    },
+                    "Notes": {
+                      "type": "string",
+                      "description": "Changelog for the latest version."
+                    },
+                    "Release": {
+                      "type": "string",
+                      "example": "June 27, 2026"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/updater/match": {
+      "post": {
+        "tags": [
+          "Updater"
+        ],
+        "summary": "Match installed shortcut names to RoutineHub listings (public)",
+        "description": "Public — no API key required. Send the names of the shortcuts on a device (the Shortcuts action Get My Shortcuts) and, optionally, the open version manifest (`iCloud Drive/Shortcuts/RoutineHub/versions.json`, `{\"<shortcut id>\": \"<installed version>\"}`). For each name the answer is one listing, several listings to pick from (top 5 by downloads, unless the manifest names exactly one of them), or nothing (the name is left out). Names match exactly, ignoring case, against published listings with an active author; private listings are never matched.\n\nPer listing the fields are the ones `GET /shortcuts/{id}/versions/latest` already returns, and `download` follows the same rules: a short-lived signed download link for trusted updater callers (send the `X-RoutineHub-Updater` header, or a valid API key), the shortcut page otherwise, and always the page for a paid shortcut so the purchase flow runs.\n\nThe Shortcuts app sends a list placed in a JSON text field as newline-separated text, and a file as its text: both forms are accepted for `names` and `manifest`.\n\nRolling out behind a switch: while the Updater is off, this route answers 404.",
+        "parameters": [
+          {
+            "name": "X-RoutineHub-Updater",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "example": "1"
+            },
+            "description": "Optional. Sent by the RoutineHub Updater shortcut. Marks the caller as a trusted updater, so `download` is a signed download link rather than the shortcut page."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "names"
+                ],
+                "properties": {
+                  "names": {
+                    "description": "Up to 200 shortcut names (duplicates count once). A JSON array, or one string with a name per line.",
+                    "oneOf": [
+                      {
+                        "type": "array",
+                        "items": {
+                          "type": "string"
+                        },
+                        "maxItems": 200
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "example": [
+                      "Weather Now",
+                      "Clipboard Tools"
+                    ]
+                  },
+                  "manifest": {
+                    "description": "Optional. The version manifest: shortcut id -> installed version. A JSON object, or its JSON text. Malformed entries are ignored.",
+                    "oneOf": [
+                      {
+                        "type": "object",
+                        "additionalProperties": {
+                          "type": "string"
+                        }
+                      },
+                      {
+                        "type": "string"
+                      }
+                    ],
+                    "example": {
+                      "7388": "1.1"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "What matched. Names with no listing are left out.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "matches": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "name": {
+                            "type": "string",
+                            "description": "The name as sent."
+                          },
+                          "id": {
+                            "type": "integer",
+                            "description": "Shortcut id (one listing only)."
+                          },
+                          "latest_version": {
+                            "type": "string",
+                            "example": "1.2"
+                          },
+                          "notes": {
+                            "type": "string",
+                            "description": "Changelog for the latest version."
+                          },
+                          "release": {
+                            "type": "string",
+                            "example": "June 27, 2026"
+                          },
+                          "url": {
+                            "type": "string",
+                            "description": "The shortcut's RoutineHub page."
+                          },
+                          "download": {
+                            "type": "string",
+                            "description": "Same rules as `URL` from versions/latest: a short-lived signed download link for trusted updater callers, otherwise the shortcut page; always the page for a paid shortcut."
+                          },
+                          "installed": {
+                            "type": "string",
+                            "description": "The manifest's version for this id, when it has one."
+                          },
+                          "behind": {
+                            "type": "boolean",
+                            "description": "True when `installed` is older than `latest_version` (numeric compare, so 1.10 is after 1.9)."
+                          },
+                          "choices": {
+                            "type": "array",
+                            "description": "Several listings share this name: the top 5 by downloads.",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "id": {
+                                  "type": "integer"
+                                },
+                                "author": {
+                                  "type": "string"
+                                },
+                                "downloads": {
+                                  "type": "integer"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "menu": {
+                      "type": "object",
+                      "description": "The same data ready for a Choose from List: label -> {id, version, open}. Updates first, then shortcuts the manifest doesn't know yet, then each listing of an ambiguous name. Up-to-date shortcuts are left out.",
+                      "additionalProperties": {
+                        "type": "object",
+                        "properties": {
+                          "id": {
+                            "type": "integer"
+                          },
+                          "version": {
+                            "type": "string"
+                          },
+                          "open": {
+                            "type": "string"
+                          }
+                        }
+                      }
+                    },
+                    "menu_count": {
+                      "type": "integer"
+                    },
+                    "summary": {
+                      "type": "string",
+                      "example": "1 update is ready."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/diagnostics/draft": {
+      "post": {
+        "tags": [
+          "Problem reports"
+        ],
+        "summary": "Drop a problem report draft for a listing (public)",
+        "description": "Public, no API key. The RoutineHub Reporter shortcut, or a dev's own debugger shortcut, sends what went wrong on a listing. Nothing is a report yet: the answer carries a one-time `claim_url`. Open it in Safari, where the person is signed in to RoutineHub; they read the scrubbed copy and press Send. Only then does it reach the listing's dev, privately. Unclaimed drafts are deleted after 60 minutes.\n\nBefore anything is saved we remove what we can spot: email addresses, phone numbers, user and app folder paths (the file name is kept), URL query strings, long key-like strings, IP addresses and GPS coordinates. This is best effort; the person reads it before sending.\n\nLimited per network address (10 a minute, 100 a day by default); over the limit answers 429 with `Retry-After`. The listing must be published, not retired, and its author active. Rolling out behind a switch: while it is off, this route answers 404.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "listing"
+                ],
+                "properties": {
+                  "listing": {
+                    "type": "integer",
+                    "description": "The shortcut id.",
+                    "example": 7388
+                  },
+                  "version": {
+                    "type": "string",
+                    "maxLength": 25,
+                    "description": "The version the person has, as they typed it.",
+                    "example": "3.2"
+                  },
+                  "ios_version": {
+                    "type": "string",
+                    "maxLength": 20,
+                    "example": "27.0"
+                  },
+                  "device_model": {
+                    "type": "string",
+                    "maxLength": 40,
+                    "example": "iPhone Air"
+                  },
+                  "note": {
+                    "type": "string",
+                    "maxLength": 1000,
+                    "description": "What went wrong, in the person's words."
+                  },
+                  "log": {
+                    "type": "string",
+                    "description": "Pasted log text. 20 KB at most."
+                  },
+                  "source": {
+                    "type": "string",
+                    "enum": [
+                      "reporter",
+                      "dev_debugger"
+                    ],
+                    "default": "reporter"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Draft saved. Open `claim_url` in Safari to send it.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "token": {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    "claim_url": {
+                      "type": "string",
+                      "format": "uri"
+                    },
+                    "expires_in": {
+                      "type": "integer",
+                      "description": "Seconds until the draft is deleted.",
+                      "example": 3600
+                    },
+                    "redactions": {
+                      "type": "integer",
+                      "description": "How many private things were removed."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad JSON, an empty report, a note over 1,000 characters, or a listing that is not published.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "error"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "No listing has this id, or the feature is off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "error"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "The log is over 20 KB.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "error"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many reports from this network. See `Retry-After`.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "error"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/ai/ask": {
+      "post": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Ask a model a question (members)",
+        "description": "Send a prompt, get text back. Works on any iOS version that has Get Contents of URL, which is every version since iOS 13.\n\nAuthenticate with your RoutineHub API key in the `X-RoutineHub-Key` header (the same key the registry API and MCP server take). The key may also travel as `key` in the body or query string, for Shortcuts actions that cannot set a header.\n\nThe answer is plain text by default, so it drops straight into a Shortcuts text variable. Ask for `Accept: application/json` or add `?format=json` to get it wrapped instead.\n\nErrors are always JSON, even in text mode, so a shortcut can never print an error sentence as if it were the answer.\n\nMembership is required: a valid key belonging to a non-member answers 402 with an upgrade URL. Two ceilings apply per UTC day, one per member and one across the site; a failed call still counts, because it still cost a request.",
+        "parameters": [
+          {
+            "name": "X-RoutineHub-Key",
+            "in": "header",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Your RoutineHub API key, from https://routinehub.co/settings. Required unless the key is sent as `key` in the body or query."
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json"
+              ]
+            },
+            "description": "Set to `json` to get the answer wrapped in JSON."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "maxLength": 8000,
+                    "description": "The question or text to work on.",
+                    "example": "Summarise this in one sentence: ..."
+                  },
+                  "system": {
+                    "type": "string",
+                    "maxLength": 2000,
+                    "description": "Optional. Replaces the default instruction, which asks for brief plain text with no Markdown.",
+                    "example": "Answer as a friendly weather reporter."
+                  },
+                  "key": {
+                    "type": "string",
+                    "description": "Your API key, if you cannot set the header."
+                  }
+                }
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "prompt"
+                ],
+                "properties": {
+                  "prompt": {
+                    "type": "string",
+                    "maxLength": 8000
+                  },
+                  "system": {
+                    "type": "string",
+                    "maxLength": 2000
+                  },
+                  "key": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The answer. Plain text by default; JSON when asked for.",
+            "content": {
+              "text/plain": {
+                "schema": {
+                  "type": "string"
+                },
+                "example": "An Apple Shortcut is a saved sequence of actions."
+              },
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "answer": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "402": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/vault/{route_id}/install": {
+      "post": {
+        "tags": [
+          "Key Vault"
+        ],
+        "summary": "Mint this install's token (public)",
+        "description": "Public — no API key required, and deliberately so: the caller is the phone of someone who installed a developer's shortcut, and requiring a RoutineHub account would make the vault unusable.\n\nCall this once, on the shortcut's first run, and keep the token. It is worth nothing anywhere else on RoutineHub: it opens exactly one route, is revocable on its own, and carries none of the publishing, pricing, MCP or Boxes access a RoutineHub API key does. **A shortcut must never ask its user for their RoutineHub API key** — that key is unscoped and grants everything that account can do.\n\nRolling out behind a switch: while the Key Vault is off, this route answers 404.",
+        "parameters": [
+          {
+            "name": "route_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "The route's id, shown on the developer's /vault/ page."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The token for this install.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "install_token": {
+                      "type": "string",
+                      "example": "rh_ik_S4mpl3T0k3n"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/vault/{route_id}/call": {
+      "post": {
+        "tags": [
+          "Key Vault"
+        ],
+        "summary": "Ask the route's question; RoutineHub adds the key",
+        "description": "The shortcut asks for the ANSWER, not the key. RoutineHub decrypts the developer's stored credential, adds it to the request, calls the upstream, and passes the reply back — so the credential never reaches the device and cannot be read out of the shortcut file.\n\nThe developer fixes the service and the base address when they create the route. A caller may add query parameters and a short path fragment (`_path`), never a different host; a parameter that collides with the injected credential is overwritten by it, and the caller's own headers are never forwarded.\n\nThe answer is the upstream's own status, content type and body, passed through unchanged.\n\nRefusals say whose problem it is: `401` this install needs setting up again, `402` the developer's membership has lapsed (after a 30-day grace), `404` the developer turned the route off, `429` a rate ceiling, `502` the developer's key stopped working, `504` the upstream did not answer.",
+        "parameters": [
+          {
+            "name": "route_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "X-RH-Install",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "rh_ik_S4mpl3T0k3n"
+            },
+            "description": "The token from /vault/{route_id}/install."
+          },
+          {
+            "name": "_path",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "example": "movie/550"
+            },
+            "description": "Optional fragment appended to the developer's address. Letters, digits and / _ - . ~ only; `..` and a leading slash are refused."
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "Passed through to the upstream unchanged, for routes the developer set to POST."
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The upstream's answer, with its own status and content type."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "402": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "502": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/sign-shortcut": {
+      "post": {
+        "tags": [
+          "Shortcuts"
+        ],
+        "summary": "Sign a .shortcut file (HubSign)",
+        "description": "Signs an unsigned `.shortcut` file via HubSign and streams back the signed file. Requires a HubSign API key (separate from the main key) and an active membership with HubSign access, unless called by an approved partner client.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "shortcut_name",
+                  "shortcut_file"
+                ],
+                "properties": {
+                  "shortcut_name": {
+                    "type": "string",
+                    "description": "Name for the signed file (becomes <name>.shortcut)."
+                  },
+                  "shortcut_file": {
+                    "type": "string",
+                    "format": "binary",
+                    "description": "The unsigned .shortcut file."
+                  },
+                  "api_key": {
+                    "type": "string",
+                    "description": "HubSign API key. Required for non-partner clients."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The signed .shortcut file.",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "402": {
+            "description": "HubSign access requires an active RoutineHub membership.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorEnvelope"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/registry/skills": {
+      "get": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "List your skills",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your skills.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "skills": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Skill"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Publish a new skill",
+        "description": "Creates a skill and its first version with one plain form POST — paste the SKILL.md as the `skill_md` field (works from a phone or curl, no multipart needed) or send a multi-file bundle as repeated `files` parts. Free by default; add `price_usd` to sell it. Runs the same validation/ingest pipeline as the website.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Provide the content either way (or both): `skill_md` — the SKILL.md text pasted as a plain form field (the simplest path: works from a phone, the Shortcuts app, or curl with no multipart) — and/or repeated `files` parts, one per bundle file, each part's filename being its bundle-relative path. The bundle must contain exactly one root SKILL.md with `name` + `description` YAML frontmatter. Limits: 25 files, 256 KB per file, 2 MB total; file types .md, .skill and .plugin only.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "brief",
+                  "version"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "slug": {
+                    "type": "string",
+                    "description": "Optional URL permalink; generated from the name when blank."
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "One-line summary (max 200 chars)."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional listing page text (markdown)."
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "First version label, e.g. \"1.0\"."
+                  },
+                  "changes": {
+                    "type": "string",
+                    "description": "Optional release notes."
+                  },
+                  "claude_surface": {
+                    "type": "string",
+                    "default": "all",
+                    "description": "Optional; defaults to `all`."
+                  },
+                  "skill_md": {
+                    "type": "string",
+                    "description": "The SKILL.md content pasted as text. Alternative to `files`."
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "Repeated `files` parts, one per bundle file; each filename is the bundle-relative path."
+                  },
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Optional: sell this skill. A plain 2 decimal amount as a string, e.g. \"1.99\" — minimum $0.99, at most 2 decimal places (amounts like \"1.999\" are rejected with 400; values are handled as exact decimals, never floats). Send \"0\" to make it free (community). Omit to leave unchanged. Requires completed seller onboarding."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Payout rail when price_usd > 0. Required only if both rails are onboarded."
+                  }
+                }
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "name",
+                  "brief",
+                  "version"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "slug": {
+                    "type": "string",
+                    "description": "Optional URL permalink; generated from the name when blank."
+                  },
+                  "brief": {
+                    "type": "string",
+                    "description": "One-line summary (max 200 chars)."
+                  },
+                  "description": {
+                    "type": "string",
+                    "description": "Optional listing page text (markdown)."
+                  },
+                  "version": {
+                    "type": "string",
+                    "description": "First version label, e.g. \"1.0\"."
+                  },
+                  "changes": {
+                    "type": "string",
+                    "description": "Optional release notes."
+                  },
+                  "claude_surface": {
+                    "type": "string",
+                    "default": "all",
+                    "description": "Optional; defaults to `all`."
+                  },
+                  "skill_md": {
+                    "type": "string",
+                    "description": "The SKILL.md content pasted as text. Alternative to `files`."
+                  },
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Optional: sell this skill. A plain 2 decimal amount as a string, e.g. \"1.99\" — minimum $0.99, at most 2 decimal places (amounts like \"1.999\" are rejected with 400; values are handled as exact decimals, never floats). Send \"0\" to make it free (community). Omit to leave unchanged. Requires completed seller onboarding."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Payout rail when price_usd > 0. Required only if both rails are onboarded."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Skill created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/{api_key}/registry/skills/{slug}": {
+      "get": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Get a skill",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The skill.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Update skill metadata",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "slug": {
+                    "type": "string"
+                  },
+                  "brief": {
+                    "type": "string"
+                  },
+                  "published": {
+                    "type": "string",
+                    "enum": [
+                      "on",
+                      "off"
+                    ]
+                  },
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Set/update price, e.g. \"1.99\" (min $0.99). Send \"0\" to make free. Omit to leave unchanged. Requires completed onboarding."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Required when price_usd > 0 and both rails are onboarded."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Skill"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Delete a skill",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/registry/skills/{slug}/versions": {
+      "get": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "List skill versions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Versions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Publish a new skill version",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "description": "Provide the content either way (or both): `skill_md` — the SKILL.md text pasted as a plain form field (the simplest path: works from a phone, the Shortcuts app, or curl with no multipart) — and/or repeated `files` parts, one per bundle file, each part's filename being its bundle-relative path. The bundle must contain exactly one root SKILL.md with `name` + `description` YAML frontmatter. Limits: 25 files, 256 KB per file, 2 MB total; file types .md, .skill and .plugin only.",
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "description": "New version label, e.g. \"1.1\"."
+                  },
+                  "changes": {
+                    "type": "string",
+                    "description": "Optional release notes."
+                  },
+                  "claude_surface": {
+                    "type": "string",
+                    "default": "all",
+                    "description": "Optional; defaults to `all`."
+                  },
+                  "skill_md": {
+                    "type": "string",
+                    "description": "The SKILL.md content pasted as text. Alternative to `files`."
+                  },
+                  "files": {
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "Repeated `files` parts, one per bundle file; each filename is the bundle-relative path."
+                  }
+                }
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "description": "New version label, e.g. \"1.1\"."
+                  },
+                  "changes": {
+                    "type": "string",
+                    "description": "Optional release notes."
+                  },
+                  "claude_surface": {
+                    "type": "string",
+                    "default": "all",
+                    "description": "Optional; defaults to `all`."
+                  },
+                  "skill_md": {
+                    "type": "string",
+                    "description": "The SKILL.md content pasted as text. Alternative to `files`."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Version created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        },
+        "description": "Publishes a new immutable version of a skill you own. Same content fields as publish: paste `skill_md` or send repeated `files` parts."
+      }
+    },
+    "/{api_key}/registry/prompts": {
+      "get": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "List your prompts",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your prompts.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "prompts": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Prompt"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "Publish a new prompt",
+        "description": "Creates a prompt and its first version (the body is stored as the version). Form-encoded.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "command",
+                  "name",
+                  "brief",
+                  "kind"
+                ],
+                "properties": {
+                  "command": {
+                    "type": "string",
+                    "description": "Slash command, e.g. /summarize."
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "brief": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "version": {
+                    "type": "string"
+                  },
+                  "changes": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "Prompt text, stored as the first version."
+                  },
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Set/update price, e.g. \"1.99\" (min $0.99). Send \"0\" to make free. Omit to leave unchanged. Requires completed onboarding."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Required when price_usd > 0 and both rails are onboarded."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Prompt created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Prompt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/{api_key}/registry/prompts/{slug}": {
+      "get": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "Get a prompt",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The prompt.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Prompt"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "Update prompt metadata",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "command": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "brief": {
+                    "type": "string"
+                  },
+                  "kind": {
+                    "type": "string"
+                  },
+                  "published": {
+                    "type": "string",
+                    "enum": [
+                      "on",
+                      "off"
+                    ]
+                  },
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Set/update price, e.g. \"1.99\" (min $0.99). Send \"0\" to make free. Omit to leave unchanged. Requires completed onboarding."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Required when price_usd > 0 and both rails are onboarded."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Prompt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "Delete a prompt",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/registry/prompts/{slug}/versions": {
+      "get": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "List prompt versions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Versions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Prompts"
+        ],
+        "summary": "Publish a new prompt version",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version",
+                  "changes",
+                  "body"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "string"
+                  },
+                  "changes": {
+                    "type": "string"
+                  },
+                  "body": {
+                    "type": "string",
+                    "description": "New prompt text."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Version created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/{api_key}/registry/plugins": {
+      "get": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "List your plugins",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your plugins.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "plugins": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Plugin"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Publish a new plugin",
+        "description": "Creates a plugin and snapshots its first version. Membership (the skills/prompts it bundles) is set with comma-separated permalinks. Form-encoded.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "namespace",
+                  "role",
+                  "package_name",
+                  "name",
+                  "brief"
+                ],
+                "properties": {
+                  "namespace": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "package_name": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "brief": {
+                    "type": "string"
+                  },
+                  "skills": {
+                    "type": "string",
+                    "description": "Comma-separated skill permalinks to bundle."
+                  },
+                  "prompts": {
+                    "type": "string",
+                    "description": "Comma-separated prompt permalinks to bundle."
+                  },
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Set/update price, e.g. \"1.99\" (min $0.99). Send \"0\" to make free. Omit to leave unchanged. Requires completed onboarding."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Required when price_usd > 0 and both rails are onboarded."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Plugin created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plugin"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/{api_key}/registry/plugins/{slug}": {
+      "get": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Get a plugin",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plugin.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plugin"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Update plugin metadata",
+        "description": "Updates metadata; optionally re-sets membership if `skills` or `prompts` are supplied.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "brief": {
+                    "type": "string"
+                  },
+                  "role": {
+                    "type": "string"
+                  },
+                  "skills": {
+                    "type": "string"
+                  },
+                  "prompts": {
+                    "type": "string"
+                  },
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Set/update price, e.g. \"1.99\" (min $0.99). Send \"0\" to make free. Omit to leave unchanged. Requires completed onboarding."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Required when price_usd > 0 and both rails are onboarded."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plugin"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Delete a plugin",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deleted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deleted"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/registry/plugins/{slug}/versions": {
+      "get": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "List plugin versions",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Versions.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Plugins"
+        ],
+        "summary": "Snapshot a new plugin version",
+        "description": "Snapshots the plugin's current membership as a new pinned version.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "version"
+                ],
+                "properties": {
+                  "version": {
+                    "type": "string"
+                  },
+                  "changes": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Version created.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionCreated"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/{api_key}/mcp": {
+      "post": {
+        "operationId": "mcpEndpoint",
+        "tags": [
+          "Registry MCP"
+        ],
+        "summary": "MCP server (JSON-RPC 2.0) — agents publish, fork and update registry items",
+        "description": "A stateless Model Context Protocol endpoint over streamable HTTP. Point an MCP client (Claude Code, any agent framework) at this URL with your API key in the path. Supports initialize, tools/list and tools/call with 22 tools: search_registry, get_item, install_item, diff_versions, fork_item, publish_prompt, publish_cherri, publish_shortcut, publish_skill, publish_plugin, publish_version, set_price, set_license, list_my_items, propose_update, list_proposals, decide_proposal, provision_vm, get_vm, list_vms, destroy_vm, add_ssh_key. install_item returns the complete installable file set for anything you can access; publish_skill and publish_plugin upload whole bundles; publish_shortcut creates an Apple Shortcut listing from an iCloud share link you already have, and set_price also prices shortcuts (pass the numeric id as slug). Paid sources stay locked until purchased; forks carry permanent attribution; paid forks accrue a royalty to the original author. The five Boxes tools (members only) create, read, list and destroy your own Google Cloud VM and register SSH keys; they are hidden until the feature is switched on.",
+        "parameters": [
+          {
+            "name": "api_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Your RoutineHub API key (Settings → API)."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "description": "A JSON-RPC 2.0 request (initialize, tools/list, tools/call, ping).",
+                "properties": {
+                  "jsonrpc": {
+                    "type": "string",
+                    "enum": [
+                      "2.0"
+                    ]
+                  },
+                  "id": {
+                    "type": "integer"
+                  },
+                  "method": {
+                    "type": "string"
+                  },
+                  "params": {
+                    "type": "object"
+                  }
+                },
+                "required": [
+                  "jsonrpc",
+                  "method"
+                ]
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "JSON-RPC response (result or error object)."
+          },
+          "202": {
+            "description": "Notification accepted (requests without an id)."
+          },
+          "401": {
+            "description": "Invalid API key."
+          }
+        }
+      }
+    },
+    "/{api_key}/registry/{bucket}/{slug}/price": {
+      "post": {
+        "tags": [
+          "Skills"
+        ],
+        "summary": "Set or clear an item's price",
+        "description": "Change ONLY the price of a skill, prompt or plugin you own. Unlike the item's detail POST (which runs the full listing form, so any field you omit is blanked), this endpoint touches pricing and nothing else. Used by the `npx routinehub` CLI.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "name": "bucket",
+            "in": "path",
+            "required": true,
+            "description": "Item type.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "skills",
+                "prompts",
+                "plugins"
+              ]
+            }
+          },
+          {
+            "$ref": "#/components/parameters/Slug"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "price_usd"
+                ],
+                "properties": {
+                  "price_usd": {
+                    "type": "string",
+                    "description": "Price as a plain 2-decimal string, e.g. \"1.99\" (minimum $0.99, maximum $100000). Amounts like \"1.999\" are rejected with 400. Send \"0\" to make the item free again."
+                  },
+                  "payout": {
+                    "type": "string",
+                    "enum": [
+                      "stripe",
+                      "crypto_usdc_base"
+                    ],
+                    "description": "Required when price_usd > 0 and both payout rails are onboarded; otherwise the onboarded rail is used."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The item's new price.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "slug": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "url": {
+                      "type": "string"
+                    },
+                    "price_usd": {
+                      "type": "string",
+                      "nullable": true,
+                      "description": "null when the item is free."
+                    },
+                    "payout": {
+                      "type": "string",
+                      "nullable": true,
+                      "enum": [
+                        "stripe",
+                        "crypto_usdc_base"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/ValidationError"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/vm": {
+      "get": {
+        "tags": [
+          "Boxes"
+        ],
+        "summary": "List my boxes",
+        "description": "Your boxes, live ones first.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your boxes.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "vms": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/Box"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Boxes"
+        ],
+        "summary": "Create a box",
+        "description": "Asks for a box and answers at once with the queued row; the machine comes up in about four minutes. Poll `GET /{api_key}/vm/{vm_id}` until `state` is `ready`, then use `ssh_command`. You need a registered SSH key first, one live box per member, and the site-wide and monthly-hours caps apply (429 when a cap is hit). JSON or form body.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "shape": {
+                    "type": "string",
+                    "enum": [
+                      "cpu-2",
+                      "cpu-8",
+                      "gpu-l4"
+                    ],
+                    "default": "cpu-2",
+                    "description": "gpu-l4 only when GPU boxes are switched on."
+                  },
+                  "ttl_hours": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8,
+                    "default": 2,
+                    "description": "Clamped to 8; a longer request is never honoured."
+                  },
+                  "name": {
+                    "type": "string",
+                    "maxLength": 48
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "The queued box.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/Box"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/vm/keys": {
+      "get": {
+        "tags": [
+          "Boxes"
+        ],
+        "summary": "List my SSH keys",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your keys.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "keys": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/SshKey"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Boxes"
+        ],
+        "summary": "Register an SSH public key",
+        "description": "One OpenSSH public key (ssh-ed25519, ssh-rsa or ecdsa-sha2-*). It is placed on your next box under your username. Duplicates answer 409.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "public_key"
+                ],
+                "properties": {
+                  "public_key": {
+                    "type": "string",
+                    "example": "ssh-ed25519 AAAA... you@laptop"
+                  },
+                  "title": {
+                    "type": "string",
+                    "maxLength": 64
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The registered key.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SshKey"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Boxes"
+        ],
+        "summary": "Remove an SSH key",
+        "description": "Pass `id` or `fingerprint`, as a JSON body or query-string parameters.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "name": "id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "fingerprint",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Removed.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "deleted": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/vm/{vm_id}": {
+      "get": {
+        "tags": [
+          "Boxes"
+        ],
+        "summary": "One box",
+        "description": "State, address, `ssh_command` (null until ready), `expires_at`, and the last 50 events, oldest first.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/BoxId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The box with its events.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "$ref": "#/components/schemas/Box"
+                    },
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        },
+                        "events": {
+                          "type": "array",
+                          "items": {
+                            "$ref": "#/components/schemas/BoxEvent"
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/vm/{vm_id}/destroy": {
+      "post": {
+        "tags": [
+          "Boxes"
+        ],
+        "summary": "Destroy a box now",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/BoxId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The destroyed box.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/Box"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/vm/{vm_id}/extend": {
+      "post": {
+        "tags": [
+          "Boxes"
+        ],
+        "summary": "Extend a box once",
+        "description": "Adds `ttl_hours` to the deadline, clamped to 8 hours from creation. Allowed once per box.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/BoxId"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "ttl_hours"
+                ],
+                "properties": {
+                  "ttl_hours": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 8
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The box with its new deadline.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/Box"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/vm/{vm_id}/events": {
+      "post": {
+        "tags": [
+          "Boxes"
+        ],
+        "summary": "Box to RoutineHub: record an event",
+        "description": "Called by the box itself, not by a member. The Bearer token is the box's own event token, minted with the box and useless anywhere else; a member API key is refused. A `vm.ready` event marks the box ready.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BoxId"
+          },
+          {
+            "name": "Authorization",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "example": "Bearer <event_token>"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "maxLength": 64
+                  },
+                  "message": {
+                    "type": "string",
+                    "maxLength": 512
+                  },
+                  "metric": {
+                    "type": [
+                      "object",
+                      "null"
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "204": {
+            "description": "Recorded (or ignored for a box that is no longer live)."
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/apps/{app_id}/install": {
+      "post": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Loader: get an install token",
+        "description": "Called by the generated loader shortcut on its first run, with no account. Returns an `rh_ik_` token the loader keeps in iCloud Drive/Shortcuts/RoutineHub/versions.json and sends as `Authorization: Bearer` to the app's front door. Rate-limited per IP and per app. Refusals answer in the loader contract: `{\"verb\": \"done\", \"text\": \"...\"}`.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/AppId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "version": {
+                    "type": "string",
+                    "description": "The shortcut version this loader reports."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "A new install token.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "token": {
+                      "type": "string",
+                      "example": "rh_ik_..."
+                    },
+                    "install": {
+                      "type": "integer"
+                    },
+                    "app": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/apps": {
+      "get": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "List my apps",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Your apps, newest first (no secrets).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string",
+                      "example": "success"
+                    },
+                    "apps": {
+                      "type": "array",
+                      "items": {
+                        "$ref": "#/components/schemas/App"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Add live logic (create an app)",
+        "description": "Writes the front-door route first, then answers with the live app and its signing secret.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "upstream_url": {
+                    "type": "string",
+                    "example": "https://my-app.example.workers.dev/"
+                  },
+                  "access": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "paid"
+                    ],
+                    "default": "public"
+                  },
+                  "shortcut_id": {
+                    "type": "integer",
+                    "description": "One of your shortcuts. One app per shortcut."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Needed when there is no shortcut_id."
+                  }
+                }
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "upstream_url": {
+                    "type": "string"
+                  },
+                  "access": {
+                    "type": "string"
+                  },
+                  "shortcut_id": {
+                    "type": "integer"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The new app, live.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/App"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/apps/{app_id}": {
+      "get": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "One app, with its signing secret",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/AppId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The app.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/App"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Change the URL, access or name",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/AppId"
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "upstream_url": {
+                    "type": "string",
+                    "example": "https://my-app.example.workers.dev/"
+                  },
+                  "access": {
+                    "type": "string",
+                    "enum": [
+                      "public",
+                      "paid"
+                    ],
+                    "default": "public"
+                  },
+                  "shortcut_id": {
+                    "type": "integer",
+                    "description": "One of your shortcuts. One app per shortcut."
+                  },
+                  "name": {
+                    "type": "string",
+                    "description": "Needed when there is no shortcut_id."
+                  }
+                }
+              }
+            },
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "upstream_url": {
+                    "type": "string"
+                  },
+                  "access": {
+                    "type": "string"
+                  },
+                  "shortcut_id": {
+                    "type": "integer"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The app, changed. A live app's route is rewritten first.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/App"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/apps/{app_id}/off": {
+      "post": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Turn off: the front door answers 404",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/AppId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The app.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/App"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/apps/{app_id}/on": {
+      "post": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Turn back on",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/AppId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The app.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/App"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/apps/{app_id}/rotate-secret": {
+      "post": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Mint a new signing secret",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/AppId"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The app.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "allOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "result": {
+                          "type": "string",
+                          "example": "success"
+                        }
+                      }
+                    },
+                    {
+                      "$ref": "#/components/schemas/App"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/apps/{app_id}/installs/{install_id}/revoke": {
+      "post": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "Revoke one install token",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/AppId"
+          },
+          {
+            "name": "install_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Revoked.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string"
+                    },
+                    "install": {
+                      "type": "integer"
+                    },
+                    "revoked": {
+                      "type": "boolean"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/{api_key}/apps/{app_id}/loader": {
+      "get": {
+        "tags": [
+          "Apps"
+        ],
+        "summary": "The loader's Cherri source",
+        "description": "Cherri source for the app's loader shortcut (contract v1: show, ask, choose, open_url, copy, speak, save_file, done). Compile it with Cherri v1.3.x, or download it signed from the shortcut page.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ApiKeyPath"
+          },
+          {
+            "$ref": "#/components/parameters/AppId"
+          },
+          {
+            "name": "version",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "The shortcut version the loader reports (letters, digits, . _ -)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The source.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "result": {
+                      "type": "string"
+                    },
+                    "filename": {
+                      "type": "string"
+                    },
+                    "cherri": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/proof-of-purchase/verify": {
+      "get": {
+        "tags": [
+          "Proof of purchase"
+        ],
+        "summary": "Did this account buy this shortcut? (GET)",
+        "description": "Public door for paid shortcuts (docs: https://routinehub.co/docs/proof-of-purchase/). Did the account behind this Proof of Purchase key buy this shortcut? The key goes in the `X-RH-Proof` header (or `Authorization: Bearer`), never in the URL. An Apple Shortcut cannot read the status code, so every answer carries `ok`, and every refusal carries an `error` sentence to show the buyer, plus `buy_url` where it helps. Counted: card purchases, crypto purchases, packs that hold the shortcut, the author, and a listing with no price. A refund or cancelled subscription flips the next answer to 402 by itself. The GET form takes the shortcut id as `?shortcut=`.",
+        "parameters": [
+          {
+            "name": "X-RH-Proof",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^rh_pop_[a-f0-9]{40}$"
+            },
+            "description": "The buyer's Proof of Purchase key, from routinehub.co/settings#api (the second key, under the developer key). Never a developer API key: that is refused with a 400 that says which key to paste."
+          },
+          {
+            "name": "shortcut",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "integer"
+            },
+            "description": "The listing's number.",
+            "example": 7388
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The account bought it (or the listing is free, or the account is its author).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "shortcut": {
+                      "type": "integer",
+                      "example": 7388
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "one_time",
+                        "subscription",
+                        "trial",
+                        "uses",
+                        "free",
+                        "author"
+                      ],
+                      "description": "What was found. `free`: the listing has no price, so everyone may run it. `author`: the account owns the listing."
+                    },
+                    "expires_at": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time",
+                      "description": "When a subscription or trial ends; null for a one-time purchase."
+                    },
+                    "uses_left": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Runs left on a pack of uses; null otherwise."
+                    },
+                    "subject": {
+                      "type": "string",
+                      "example": "k9d2f0a1b7c3e4d5",
+                      "description": "A pseudonym for this buyer ON THIS SHORTCUT: stable for the pair, different on every other shortcut, never a username, unchanged when the key is regenerated."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad ask: no shortcut id, no such shortcut, a non-JSON body, or a developer API key pasted by mistake. `error` says which.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The key is not valid, or its account is disabled. One message for both, on purpose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Not bought, access ended, or the pack is empty. `error` says which; `buy_url` is the listing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Proof of Purchase is switched off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many checks (per key: 60 a minute, 2,000 a day, 20 distinct shortcuts a day; per address: 120 a minute). `Retry-After` is set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Proof of purchase"
+        ],
+        "summary": "Did this account buy this shortcut?",
+        "description": "Public door for paid shortcuts (docs: https://routinehub.co/docs/proof-of-purchase/). Did the account behind this Proof of Purchase key buy this shortcut? The key goes in the `X-RH-Proof` header (or `Authorization: Bearer`), never in the URL. An Apple Shortcut cannot read the status code, so every answer carries `ok`, and every refusal carries an `error` sentence to show the buyer, plus `buy_url` where it helps. Counted: card purchases, crypto purchases, packs that hold the shortcut, the author, and a listing with no price. A refund or cancelled subscription flips the next answer to 402 by itself.",
+        "parameters": [
+          {
+            "name": "X-RH-Proof",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^rh_pop_[a-f0-9]{40}$"
+            },
+            "description": "The buyer's Proof of Purchase key, from routinehub.co/settings#api (the second key, under the developer key). Never a developer API key: that is refused with a 400 that says which key to paste."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "shortcut"
+                ],
+                "properties": {
+                  "shortcut": {
+                    "type": "integer",
+                    "description": "The listing's number: routinehub.co/shortcut/**7388**/.",
+                    "example": 7388
+                  },
+                  "run_id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "Only read by `/use`: your own id for this run. The same `run_id` twice spends one run."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The account bought it (or the listing is free, or the account is its author).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "shortcut": {
+                      "type": "integer",
+                      "example": 7388
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "one_time",
+                        "subscription",
+                        "trial",
+                        "uses",
+                        "free",
+                        "author"
+                      ],
+                      "description": "What was found. `free`: the listing has no price, so everyone may run it. `author`: the account owns the listing."
+                    },
+                    "expires_at": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time",
+                      "description": "When a subscription or trial ends; null for a one-time purchase."
+                    },
+                    "uses_left": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Runs left on a pack of uses; null otherwise."
+                    },
+                    "subject": {
+                      "type": "string",
+                      "example": "k9d2f0a1b7c3e4d5",
+                      "description": "A pseudonym for this buyer ON THIS SHORTCUT: stable for the pair, different on every other shortcut, never a username, unchanged when the key is regenerated."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad ask: no shortcut id, no such shortcut, a non-JSON body, or a developer API key pasted by mistake. `error` says which.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The key is not valid, or its account is disabled. One message for both, on purpose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Not bought, access ended, or the pack is empty. `error` says which; `buy_url` is the listing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Proof of Purchase is switched off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many checks (per key: 60 a minute, 2,000 a day, 20 distinct shortcuts a day; per address: 120 a minute). `Retry-After` is set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/proof-of-purchase/use": {
+      "post": {
+        "tags": [
+          "Proof of purchase"
+        ],
+        "summary": "Verify, and spend one run of a pack of uses",
+        "description": "The same answer as `/proof-of-purchase/verify`, and when the purchase is a **pack of uses** it also spends one run: `uses_left` comes back one lower. Send your own `run_id` (any text up to 64 characters, unique per run); the same `run_id` twice spends nothing, so a retried run is never charged twice. An empty pack answers 402 with `buy_url`, and the buyer can buy another pack. For one-time and subscription purchases this behaves exactly like `/verify`.",
+        "parameters": [
+          {
+            "name": "X-RH-Proof",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^rh_pop_[a-f0-9]{40}$"
+            },
+            "description": "The buyer's Proof of Purchase key, from routinehub.co/settings#api (the second key, under the developer key). Never a developer API key: that is refused with a 400 that says which key to paste."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": [
+                  "shortcut"
+                ],
+                "properties": {
+                  "shortcut": {
+                    "type": "integer",
+                    "description": "The listing's number: routinehub.co/shortcut/**7388**/.",
+                    "example": 7388
+                  },
+                  "run_id": {
+                    "type": "string",
+                    "maxLength": 64,
+                    "description": "Only read by `/use`: your own id for this run. The same `run_id` twice spends one run."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The account bought it (or the listing is free, or the account is its author).",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": true
+                    },
+                    "shortcut": {
+                      "type": "integer",
+                      "example": 7388
+                    },
+                    "kind": {
+                      "type": "string",
+                      "enum": [
+                        "one_time",
+                        "subscription",
+                        "trial",
+                        "uses",
+                        "free",
+                        "author"
+                      ],
+                      "description": "What was found. `free`: the listing has no price, so everyone may run it. `author`: the account owns the listing."
+                    },
+                    "expires_at": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "format": "date-time",
+                      "description": "When a subscription or trial ends; null for a one-time purchase."
+                    },
+                    "uses_left": {
+                      "type": [
+                        "integer",
+                        "null"
+                      ],
+                      "description": "Runs left on a pack of uses; null otherwise."
+                    },
+                    "subject": {
+                      "type": "string",
+                      "example": "k9d2f0a1b7c3e4d5",
+                      "description": "A pseudonym for this buyer ON THIS SHORTCUT: stable for the pair, different on every other shortcut, never a username, unchanged when the key is regenerated."
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad ask: no shortcut id, no such shortcut, a non-JSON body, or a developer API key pasted by mistake. `error` says which.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "The key is not valid, or its account is disabled. One message for both, on purpose.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "402": {
+            "description": "Not bought, access ended, or the pack is empty. `error` says which; `buy_url` is the listing.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Proof of Purchase is switched off.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many checks (per key: 60 a minute, 2,000 a day, 20 distinct shortcuts a day; per address: 120 a minute). `Retry-After` is set.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "ok": {
+                      "type": "boolean",
+                      "example": false
+                    },
+                    "error": {
+                      "type": "string",
+                      "description": "A sentence written to be shown to the buyer as-is.",
+                      "example": "No purchase of Battery Report found on this account."
+                    },
+                    "buy_url": {
+                      "type": "string",
+                      "format": "uri",
+                      "example": "https://routinehub.co/shortcut/7388/"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "ApiKeyPath": {
+        "name": "api_key",
+        "in": "path",
+        "required": true,
+        "description": "Your 40-character RoutineHub API key.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ShortcutId": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "description": "Numeric shortcut id (from the shortcut URL).",
+        "schema": {
+          "type": "integer"
+        }
+      },
+      "Slug": {
+        "name": "slug",
+        "in": "path",
+        "required": true,
+        "description": "The item's permalink slug.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "BoxId": {
+        "name": "vm_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        },
+        "description": "The box id."
+      },
+      "AppId": {
+        "name": "app_id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "integer"
+        },
+        "description": "The app id."
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "Error envelope.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      },
+      "ValidationError": {
+        "description": "Invalid metadata; `errors` holds per-field messages.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ValidationErrorEnvelope"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "Daily publishing cap reached.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorEnvelope"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "example": "error"
+          },
+          "message": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "result",
+          "message"
+        ]
+      },
+      "ValidationErrorEnvelope": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "example": "error"
+          },
+          "message": {
+            "type": "string"
+          },
+          "errors": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "MessageEnvelope": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "enum": [
+              "success",
+              "error"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Deleted": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "example": "success"
+          },
+          "deleted": {
+            "type": "string",
+            "description": "The deleted slug."
+          }
+        }
+      },
+      "VersionList": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "example": "success"
+          },
+          "versions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "version": {
+                  "type": "string"
+                },
+                "changes": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          }
+        }
+      },
+      "VersionCreated": {
+        "type": "object",
+        "properties": {
+          "result": {
+            "type": "string",
+            "example": "success"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "Skill": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "brief": {
+            "type": "string"
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string"
+          },
+          "latest_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "price_usd": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Current price as a decimal string, e.g. \"1.99\". Null if free."
+          },
+          "payout": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "stripe",
+              "crypto_usdc_base",
+              null
+            ],
+            "description": "Active payout rail. Null if free."
+          }
+        }
+      },
+      "Prompt": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "brief": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string"
+          },
+          "latest_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "price_usd": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Current price as a decimal string. Null if free."
+          },
+          "payout": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "stripe",
+              "crypto_usdc_base",
+              null
+            ],
+            "description": "Active payout rail. Null if free."
+          }
+        }
+      },
+      "Plugin": {
+        "type": "object",
+        "properties": {
+          "slug": {
+            "type": "string"
+          },
+          "package_name": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "role": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "brief": {
+            "type": "string"
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string"
+          },
+          "version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "skills": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prompts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "price_usd": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Current price as a decimal string. Null if free."
+          },
+          "payout": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "stripe",
+              "crypto_usdc_base",
+              null
+            ],
+            "description": "Active payout rail. Null if free."
+          }
+        }
+      },
+      "Box": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "shape": {
+            "type": "string",
+            "enum": [
+              "cpu-2",
+              "cpu-8",
+              "gpu-l4"
+            ]
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "creating",
+              "ready",
+              "expired",
+              "removed",
+              "destroyed",
+              "failed"
+            ]
+          },
+          "zone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "external_ip": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "linux_user": {
+            "type": "string",
+            "description": "Your RoutineHub username, sanitised: the login on the box."
+          },
+          "ssh_command": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`ssh <linux_user>@<ip>`; null until the box is ready."
+          },
+          "ttl_hours": {
+            "type": "integer"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "provisioned_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ready_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "ended_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "error_code": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error_message": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "extended": {
+            "type": "boolean",
+            "description": "True once the one allowed extension has been used."
+          }
+        }
+      },
+      "BoxEvent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "metric": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "SshKey": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "title": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string",
+            "enum": [
+              "ssh-ed25519",
+              "ssh-rsa",
+              "ecdsa-sha2-nistp256",
+              "ecdsa-sha2-nistp384",
+              "ecdsa-sha2-nistp521"
+            ]
+          },
+          "fingerprint": {
+            "type": "string",
+            "example": "SHA256:..."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "App": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "proxy",
+              "key_proxy",
+              "js",
+              "python"
+            ],
+            "description": "Only `proxy` (your own URL) exists today."
+          },
+          "shortcut_id": {
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "upstream_url": {
+            "type": "string",
+            "description": "Your server. https, a public name (no IP), no port, no query."
+          },
+          "stage": {
+            "type": "string",
+            "enum": [
+              "box",
+              "live",
+              "off"
+            ]
+          },
+          "hostname": {
+            "type": "string",
+            "example": "you-weather.apps.rhub.pro"
+          },
+          "url": {
+            "type": "string",
+            "example": "https://you-weather.apps.rhub.pro/"
+          },
+          "access": {
+            "type": "string",
+            "enum": [
+              "public",
+              "paid"
+            ],
+            "description": "Paid: buyer checks are coming; until then every call carries `X-RH-Entitled: 0`."
+          },
+          "loader_version": {
+            "type": "integer",
+            "description": "The loader contract version (1 = the eight verbs)."
+          },
+          "installs": {
+            "type": "integer",
+            "description": "Install tokens minted and not revoked."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deployed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "secret": {
+            "type": "string",
+            "description": "The signing secret. Only on a single app, never in a list."
+          }
+        }
+      }
+    }
+  }
+}
